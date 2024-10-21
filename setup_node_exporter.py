@@ -1,10 +1,13 @@
 import os
+import sys
 import urllib.request
+import ipaddress
 
 # Configuration
 NODE_EXPORTER_VERSION = "1.6.0"
 NODE_EXPORTER_URL = f"https://github.com/prometheus/node_exporter/releases/download/v{NODE_EXPORTER_VERSION}/node_exporter-{NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
 TEXTFILE_COLLECTOR_DIRECTORY = "/var/lib/node_exporter/textfile_collector"  # Constant for textfile collector directory
+NODE_EXPORTER_PORT = 9100  # Constant for Node Exporter port
 NODE_EXPORTER_SERVICE = f"""
 [Unit]
 Description=Node Exporter
@@ -15,7 +18,7 @@ After=network-online.target
 User=node_exporter
 Group=node_exporter
 Type=simple
-ExecStart=/usr/local/bin/node_exporter --collector.textfile.directory={TEXTFILE_COLLECTOR_DIRECTORY}
+ExecStart=/usr/local/bin/node_exporter --collector.textfile.directory={TEXTFILE_COLLECTOR_DIRECTORY} --web.listen-address=:{NODE_EXPORTER_PORT}
 
 [Install]
 WantedBy=multi-user.target
@@ -79,11 +82,24 @@ fi
     cron_job = f"*/5 * * * * {script_path}"
     os.system(f'(sudo crontab -l 2>/dev/null; echo "{cron_job}") | sudo crontab -')
 
-# Step 3: Check metrics
+# Step 3: Set up UFW to allow access only from a specific IP
+def configure_ufw(prometheus_ip):
+    print(f"Configuring UFW to allow access to port {NODE_EXPORTER_PORT} only from {prometheus_ip}...")
+    
+    # Allow access from Prometheus server
+    os.system(f"sudo ufw allow from {prometheus_ip} to any port {NODE_EXPORTER_PORT}")
+    
+    # Deny access to everyone else
+    os.system(f"sudo ufw deny {NODE_EXPORTER_PORT}")
+    
+    # Reload UFW to apply the changes
+    os.system("sudo ufw reload")
+
+# Step 4: Check metrics
 def check_metrics():
     # Check if metrics are available via HTTP
-    url = "http://localhost:9100/metrics"
-    print("Checking metrics at http://localhost:9100/metrics")
+    url = f"http://localhost:{NODE_EXPORTER_PORT}/metrics"
+    print(f"Checking metrics at {url}")
     
     try:
         with urllib.request.urlopen(url) as response:
@@ -148,13 +164,36 @@ def get_mdstat_status():
     except Exception as e:
         return f"Error: {e}"
 
+# Step 5: Validate IP address
+def is_valid_ip(ip_address):
+    try:
+        # Validate IP address format (both IPv4 and IPv6)
+        ipaddress.ip_address(ip_address)
+        return True
+    except ValueError:
+        return False
+
 # Main script
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python3 setup_node_exporter.py <prometheus_ip>")
+        sys.exit(1)
+
+    prometheus_ip = sys.argv[1]
+
+    # Validate IP address
+    if not is_valid_ip(prometheus_ip):
+        print(f"Invalid IP address: {prometheus_ip}")
+        sys.exit(1)
+
     print("Installing Node Exporter...")
     install_node_exporter()
     
     print("\nCreating RAID status script...")
     create_raid_status_script()
+    
+    print(f"\nConfiguring UFW to allow access only from {prometheus_ip}...")
+    configure_ufw(prometheus_ip)
     
     print("\nChecking Node Exporter metrics...")
     check_metrics()
