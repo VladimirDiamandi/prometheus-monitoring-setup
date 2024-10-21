@@ -138,9 +138,13 @@ def get_mdstat_status():
     try:
         with open("/proc/mdstat") as f:
             mdstat = f.read()
-            if "active" in mdstat:
+            # If no RAID arrays are listed
+            if "Personalities" in mdstat and "unused devices" in mdstat:
+                return "No RAID arrays are active"
+            elif "active" in mdstat:
                 return "RAID is working"
-            return "RAID has issues"
+            else:
+                return "RAID has issues"
     except Exception as e:
         return f"Error: {e}"
 
