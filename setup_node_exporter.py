@@ -4,8 +4,7 @@ import urllib.request
 import ipaddress
 
 # Configuration
-NODE_EXPORTER_VERSION = "1.6.0"
-NODE_EXPORTER_URL = f"https://github.com/prometheus/node_exporter/releases/download/v{NODE_EXPORTER_VERSION}/node_exporter-{NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
+NODE_EXPORTER_VERSION = "1.8.2"
 TEXTFILE_COLLECTOR_DIRECTORY = "/var/lib/node_exporter/textfile_collector"  # Constant for textfile collector directory
 NODE_EXPORTER_PORT = 9100  # Constant for Node Exporter port
 NODE_EXPORTER_SERVICE = f"""
@@ -25,15 +24,19 @@ WantedBy=multi-user.target
 """
 
 # Step 1: Install Node Exporter
-def install_node_exporter():
+def install_node_exporter(build_architecture):
     # Download Node Exporter
-    print("Downloading Node Exporter...")
+    NODE_EXPORTER_URL = f"https://github.com/prometheus/node_exporter/releases/download/v{NODE_EXPORTER_VERSION}/node_exporter-{NODE_EXPORTER_VERSION}.{build_architecture}.tar.gz"
+    print(f"Downloading Node Exporter ({build_architecture})...")
     urllib.request.urlretrieve(NODE_EXPORTER_URL, "node_exporter.tar.gz")
     
     # Extract Node Exporter
     print("Extracting Node Exporter...")
     os.system("tar xvfz node_exporter.tar.gz")
-    os.system("sudo mv node_exporter-1.6.0.linux-amd64/node_exporter /usr/local/bin/")
+    
+    # Move Node Exporter binary to /usr/local/bin/
+    node_exporter_dir = f"node_exporter-{NODE_EXPORTER_VERSION}.{build_architecture}"
+    os.system(f"sudo mv {node_exporter_dir}/node_exporter /usr/local/bin/")
     
     # Create a user for Node Exporter
     print("Creating node_exporter user...")
@@ -53,6 +56,9 @@ def install_node_exporter():
     os.system("sudo systemctl daemon-reload")
     os.system("sudo systemctl enable node_exporter")
     os.system("sudo systemctl start node_exporter")
+
+    print("Removing temporary files...")
+    os.system(f"rm -rf node_exporter.tar.gz {node_exporter_dir}")
 
 # Step 2: Create RAID status script
 def create_raid_status_script():
@@ -79,92 +85,21 @@ fi
 
     # Set up a cron job to run the script every 5 minutes
     print("Setting up cron job to run RAID status script...")
-    cron_job = f"*/5 * * * * {script_path}"
-    os.system(f'(sudo crontab -l 2>/dev/null; echo "{cron_job}") | sudo crontab -')
+    with open("/etc/cron.d/raid_status", "w") as cron_file:
+        cron_file.write(f"*/5 * * * * root {script_path}\n")
 
-# Step 3: Set up UFW to allow access only from a specific IP
-def configure_ufw(prometheus_ip):
-    print(f"Configuring UFW to allow access to port {NODE_EXPORTER_PORT} only from {prometheus_ip}...")
-    
+# Step 3: Set up iptables to allow access only from a specific IP
+def configure_iptables(prometheus_ip):    
     # Allow access from Prometheus server
-    os.system(f"sudo ufw allow from {prometheus_ip} to any port {NODE_EXPORTER_PORT}")
+    os.system(f"sudo iptables -A INPUT -p tcp --dport {NODE_EXPORTER_PORT} -s {prometheus_ip} -j ACCEPT")
     
     # Deny access to everyone else
-    os.system(f"sudo ufw deny {NODE_EXPORTER_PORT}")
+    os.system(f"sudo iptables -A INPUT -p tcp --dport {NODE_EXPORTER_PORT} -j DROP")
     
-    # Reload UFW to apply the changes
-    os.system("sudo ufw reload")
+    # Save iptables rules to persist after reboot
+    os.system("sudo sh -c 'iptables-save > /etc/iptables/rules.v4'")
 
-# Step 4: Check metrics
-def check_metrics():
-    # Check if metrics are available via HTTP
-    url = f"http://localhost:{NODE_EXPORTER_PORT}/metrics"
-    print(f"Checking metrics at {url}")
-    
-    try:
-        with urllib.request.urlopen(url) as response:
-            metrics = response.read().decode("utf-8")
-            print("Metrics successfully fetched. Examples:")
-            print("Uptime:", get_uptime(metrics))
-            print("CPU Load:", get_cpu_load(metrics))
-            print("RAM Usage:", get_ram_usage(metrics))
-            print("Disk Usage:", get_disk_usage(metrics))
-            print("RAID Status (mdstat):", get_mdstat_status())
-    except Exception as e:
-        print("Error while fetching metrics:", e)
-
-# Functions to extract specific metrics
-def get_uptime(metrics):
-    # Extract uptime from metrics (convert seconds to hours)
-    uptime_line = [line for line in metrics.split("\n") if "node_time_seconds" in line]
-    if uptime_line:
-        uptime_seconds = float(uptime_line[0].split()[1])
-        return uptime_seconds / 3600  # Convert seconds to hours
-    return None
-
-def get_cpu_load(metrics):
-    # Extract CPU load (average over 1 minute)
-    load_lines = [line for line in metrics.split("\n") if "node_load1" in line]
-    if load_lines:
-        return float(load_lines[0].split()[1])
-    return None
-
-def get_ram_usage(metrics):
-    # Extract total and available memory, then calculate used memory percentage
-    mem_total = None
-    mem_free = None
-    for line in metrics.split("\n"):
-        if "node_memory_MemTotal_bytes" in line:
-            mem_total = float(line.split()[1])
-        if "node_memory_MemAvailable_bytes" in line:
-            mem_free = float(line.split()[1])
-    if mem_total and mem_free:
-        return (mem_total - mem_free) / mem_total * 100  # Calculate memory usage in percentage
-    return None
-
-def get_disk_usage(metrics):
-    # Extract disk usage by checking available space
-    disk_usage_lines = [line for line in metrics.split("\n") if "node_filesystem_avail_bytes" in line]
-    if disk_usage_lines:
-        return float(disk_usage_lines[0].split()[1])  # Return available disk space in bytes
-    return None
-
-def get_mdstat_status():
-    # Check RAID status from /proc/mdstat
-    try:
-        with open("/proc/mdstat") as f:
-            mdstat = f.read()
-            # If no RAID arrays are listed
-            if "Personalities" in mdstat and "unused devices" in mdstat:
-                return "No RAID arrays are active"
-            elif "active" in mdstat:
-                return "RAID is working"
-            else:
-                return "RAID has issues"
-    except Exception as e:
-        return f"Error: {e}"
-
-# Step 5: Validate IP address
+# Step 4: Validate IP address
 def is_valid_ip(ip_address):
     try:
         # Validate IP address format (both IPv4 and IPv6)
@@ -175,25 +110,24 @@ def is_valid_ip(ip_address):
 
 # Main script
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python3 setup_node_exporter.py <prometheus_ip>")
+    if len(sys.argv) != 3:
+        print("Usage: python3 setup_node_exporter.py <prometheus_ip> <build_architecture>")
+        print("Example: python3 setup_node_exporter.py 192.168.1.1 linux-amd64")
         sys.exit(1)
 
     prometheus_ip = sys.argv[1]
+    build_architecture = sys.argv[2]
 
     # Validate IP address
     if not is_valid_ip(prometheus_ip):
         print(f"Invalid IP address: {prometheus_ip}")
         sys.exit(1)
 
-    print("Installing Node Exporter...")
-    install_node_exporter()
+    print(f"Installing Node Exporter for architecture {build_architecture}...")
+    install_node_exporter(build_architecture)
     
     print("\nCreating RAID status script...")
     create_raid_status_script()
     
-    print(f"\nConfiguring UFW to allow access only from {prometheus_ip}...")
-    configure_ufw(prometheus_ip)
-    
-    print("\nChecking Node Exporter metrics...")
-    check_metrics()
+    print(f"\nConfiguring iptables to allow access only from {prometheus_ip}...")
+    configure_iptables(prometheus_ip)
