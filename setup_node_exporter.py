@@ -1,11 +1,11 @@
 import os
-import subprocess
 import urllib.request
 
 # Configuration
-node_exporter_version = "1.6.0"
-node_exporter_url = f"https://github.com/prometheus/node_exporter/releases/download/v{node_exporter_version}/node_exporter-{node_exporter_version}.linux-amd64.tar.gz"
-node_exporter_service = """
+NODE_EXPORTER_VERSION = "1.6.0"
+NODE_EXPORTER_URL = f"https://github.com/prometheus/node_exporter/releases/download/v{NODE_EXPORTER_VERSION}/node_exporter-{NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
+TEXTFILE_COLLECTOR_DIRECTORY = "/var/lib/node_exporter/textfile_collector"  # Constant for textfile collector directory
+NODE_EXPORTER_SERVICE = f"""
 [Unit]
 Description=Node Exporter
 Wants=network-online.target
@@ -15,7 +15,7 @@ After=network-online.target
 User=node_exporter
 Group=node_exporter
 Type=simple
-ExecStart=/usr/local/bin/node_exporter
+ExecStart=/usr/local/bin/node_exporter --collector.textfile.directory={TEXTFILE_COLLECTOR_DIRECTORY}
 
 [Install]
 WantedBy=multi-user.target
@@ -25,7 +25,7 @@ WantedBy=multi-user.target
 def install_node_exporter():
     # Download Node Exporter
     print("Downloading Node Exporter...")
-    urllib.request.urlretrieve(node_exporter_url, "node_exporter.tar.gz")
+    urllib.request.urlretrieve(NODE_EXPORTER_URL, "node_exporter.tar.gz")
     
     # Extract Node Exporter
     print("Extracting Node Exporter...")
@@ -36,10 +36,14 @@ def install_node_exporter():
     print("Creating node_exporter user...")
     os.system("sudo useradd --no-create-home --shell /bin/false node_exporter")
     
+    # Create textfile collector directory
+    print(f"Creating directory for textfile collector at {TEXTFILE_COLLECTOR_DIRECTORY}...")
+    os.makedirs(TEXTFILE_COLLECTOR_DIRECTORY, exist_ok=True)
+    
     # Create systemd unit file
     print("Creating systemd unit for Node Exporter...")
     with open("/etc/systemd/system/node_exporter.service", "w") as f:
-        f.write(node_exporter_service)
+        f.write(NODE_EXPORTER_SERVICE)
     
     # Reload systemd and start the service
     print("Starting Node Exporter...")
@@ -47,7 +51,35 @@ def install_node_exporter():
     os.system("sudo systemctl enable node_exporter")
     os.system("sudo systemctl start node_exporter")
 
-# Step 2: Check metrics
+# Step 2: Create RAID status script
+def create_raid_status_script():
+    # Script to parse /proc/mdstat and generate metrics for Node Exporter
+    raid_script = f"""
+#!/bin/bash
+# Parse /proc/mdstat and output RAID status for Prometheus
+
+if grep -q "\\[.*_.*\\]" /proc/mdstat; then
+  echo "raid_sync_active 1" > {TEXTFILE_COLLECTOR_DIRECTORY}/raid_status.prom
+else
+  echo "raid_sync_active 0" > {TEXTFILE_COLLECTOR_DIRECTORY}/raid_status.prom
+fi
+"""
+    
+    # Write the script to file
+    print("Creating RAID status script...")
+    script_path = "/usr/local/bin/raid_status.sh"
+    with open(script_path, "w") as f:
+        f.write(raid_script)
+    
+    # Make the script executable
+    os.system(f"sudo chmod +x {script_path}")
+
+    # Set up a cron job to run the script every 5 minutes
+    print("Setting up cron job to run RAID status script...")
+    cron_job = f"*/5 * * * * {script_path}"
+    os.system(f'(sudo crontab -l 2>/dev/null; echo "{cron_job}") | sudo crontab -')
+
+# Step 3: Check metrics
 def check_metrics():
     # Check if metrics are available via HTTP
     url = "http://localhost:9100/metrics"
@@ -116,6 +148,9 @@ def get_mdstat_status():
 if __name__ == "__main__":
     print("Installing Node Exporter...")
     install_node_exporter()
+    
+    print("\nCreating RAID status script...")
+    create_raid_status_script()
     
     print("\nChecking Node Exporter metrics...")
     check_metrics()
