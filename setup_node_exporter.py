@@ -91,10 +91,10 @@ fi
 # Step 3: Set up iptables to allow access only from a specific IP
 def configure_iptables(prometheus_ip):    
     # Allow access from Prometheus server
-    os.system(f"sudo iptables -A INPUT -p tcp --dport {NODE_EXPORTER_PORT} -s {prometheus_ip} -j ACCEPT")
+    os.system(f"sudo iptables -I INPUT 1 -p tcp --dport {NODE_EXPORTER_PORT} -s {prometheus_ip} -j ACCEPT")
     
     # Deny access to everyone else
-    os.system(f"sudo iptables -A INPUT -p tcp --dport {NODE_EXPORTER_PORT} -j DROP")
+    os.system(f"sudo iptables -I INPUT 2 -p tcp --dport {NODE_EXPORTER_PORT} -j DROP")
     
     # Save iptables rules to persist after reboot
     os.system("sudo sh -c 'iptables-save > /etc/iptables/rules.v4'")
