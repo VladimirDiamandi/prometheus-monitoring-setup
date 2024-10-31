@@ -1,6 +1,9 @@
 apt update
+
+DEBIAN_FRONTEND=noninteractive
 apt install -y python3-pip
 apt install -y nvme-cli
+
 pip3 install prometheus-client
 curl https://raw.githubusercontent.com/VladimirDiamandi/prometheus-monitoring-setup/main/nvme_metrics.py > /var/lib/node_exporter/nvme_metrics.py
 
