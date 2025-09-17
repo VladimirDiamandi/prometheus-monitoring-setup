@@ -2,6 +2,7 @@ import os
 import sys
 import urllib.request
 import ipaddress
+import subprocess
 
 # Configuration
 NODE_EXPORTER_VERSION = "1.8.2"
@@ -64,20 +65,33 @@ def install_node_exporter(build_architecture):
     os.system(f"rm -rf node_exporter.tar.gz {node_exporter_dir}")
 
 
-# Step 2: Set up iptables to allow access only from a specific IP
-def configure_iptables(prometheus_ip):
-    # Allow access from Prometheus server
-    os.system(
-        f"sudo iptables -I INPUT 1 -p tcp --dport {NODE_EXPORTER_PORT} -s {prometheus_ip} -j ACCEPT"
-    )
+# Step 2: Set up firewall rules to allow access only from a specific IP
+def configure_firewall_rules(prometheus_ip):
+    try:
+        ufw_status = subprocess.getoutput("sudo ufw status")
+        if "status: active" in (ufw_status.lower()):
+            print("UFW is active, configuring rules...")
+            os.system(
+                f"sudo ufw allow from {prometheus_ip} to any port {NODE_EXPORTER_PORT}"
+            )
+            return
 
-    # Deny access to everyone else
-    os.system(f"sudo iptables -I INPUT 2 -p tcp --dport {NODE_EXPORTER_PORT} -j DROP")
+        print("UFW is inactive, using iptables...")
+        # Allow access from Prometheus server
+        os.system(
+            f"sudo iptables -I INPUT 1 -p tcp --dport {NODE_EXPORTER_PORT} -s {prometheus_ip} -j ACCEPT"
+        )
+        # Deny access to everyone else
+        os.system(
+            f"sudo iptables -I INPUT 2 -p tcp --dport {NODE_EXPORTER_PORT} -j DROP"
+        )
 
-    # create directory if it doesn't exist
-    os.makedirs("/etc/iptables", exist_ok=True)
-    # Save iptables rules to persist after reboot
-    os.system("sudo sh -c 'iptables-save > /etc/iptables/rules.v4'")
+        # create directory if it doesn't exist
+        os.makedirs("/etc/iptables", exist_ok=True)
+        # Save iptables rules to persist after reboot
+        os.system("sudo sh -c 'iptables-save > /etc/iptables/rules.v4'")
+    except Exception as e:
+        print(f"Error configuring firewall rules: {e}")
 
 
 def is_valid_ip(ip_address):
@@ -110,4 +124,4 @@ if __name__ == "__main__":
     install_node_exporter(build_architecture)
 
     print(f"\nConfiguring iptables to allow access only from {prometheus_ip}...")
-    configure_iptables(prometheus_ip)
+    configure_firewall_rules(prometheus_ip)
