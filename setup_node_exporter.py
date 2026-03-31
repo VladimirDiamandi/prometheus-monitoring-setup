@@ -5,7 +5,7 @@ import ipaddress
 import subprocess
 
 # Configuration
-NODE_EXPORTER_VERSION = "1.9.1"
+NODE_EXPORTER_VERSION = "1.10.2"
 TEXTFILE_COLLECTOR_DIRECTORY = "/var/lib/node_exporter/textfile_collector"  # Constant for textfile collector directory
 NODE_EXPORTER_PORT = 9100  # Constant for Node Exporter port
 NODE_EXPORTER_SERVICE = f"""
